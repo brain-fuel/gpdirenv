@@ -14,13 +14,16 @@ import (
 // both valid and malformed input. Each law below is a differential property
 // checked over quick-generated inputs.
 
+// forge.Algo is now a Go+ enum: variants are constructed as struct literals
+// (forge.SHA256{}) from plain Go. upstream.Algo remains a string type.
 var algos = []struct {
-	f forge.Algo
-	u upstream.Algo
+	name string
+	f    forge.Algo
+	u    upstream.Algo
 }{
-	{forge.SHA256, upstream.SHA256},
-	{forge.SHA384, upstream.SHA384},
-	{forge.SHA512, upstream.SHA512},
+	{"sha256", forge.SHA256{}, upstream.SHA256},
+	{"sha384", forge.SHA384{}, upstream.SHA384},
+	{"sha512", forge.SHA512{}, upstream.SHA512},
 }
 
 func check(t *testing.T, name string, f any) {
@@ -34,7 +37,7 @@ func check(t *testing.T, name string, f any) {
 func TestWriterSumEqualsUpstream(t *testing.T) {
 	for _, a := range algos {
 		a := a
-		check(t, "Sum/"+string(a.f), func(data []byte) bool {
+		check(t, "Sum/"+a.name, func(data []byte) bool {
 			var fb, ub bytes.Buffer
 			fw := forge.NewWriter(&fb, a.f)
 			uw := upstream.NewWriter(&ub, a.u)
@@ -54,7 +57,7 @@ func TestWriterSumEqualsUpstream(t *testing.T) {
 func TestParseRoundTripEqualsUpstream(t *testing.T) {
 	for _, a := range algos {
 		a := a
-		check(t, "Parse/"+string(a.f), func(data []byte) bool {
+		check(t, "Parse/"+a.name, func(data []byte) bool {
 			var fb, ub bytes.Buffer
 			s := func() string {
 				w := forge.NewWriter(&fb, a.f)

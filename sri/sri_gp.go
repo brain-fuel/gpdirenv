@@ -20,14 +20,125 @@ import (
 	"strings"
 )
 
-// Algo names a supported hash algorithm.
-type Algo string
+// Algo is a supported hash algorithm — a closed set expressed as a Go+ enum so
+// every consumer must handle all three cases.
+//
+//goplus:enum Algo
+type Algo interface{ isAlgo() }
 
-const (
-	SHA256 = Algo("sha256")
-	SHA384 = Algo("sha384")
-	SHA512 = Algo("sha512")
-)
+//goplus:variant (Algo) SHA256
+type SHA256 struct{}
+
+func (SHA256) isAlgo() {}
+
+//goplus:variant (Algo) SHA384
+type SHA384 struct{}
+
+func (SHA384) isAlgo() {}
+
+//goplus:variant (Algo) SHA512
+type SHA512 struct{}
+
+func (SHA512) isAlgo() {}
+
+// AlgoCases selects one handler per Algo variant for Fold.
+type AlgoCases[R any] struct {
+	SHA256 func() R
+	SHA384 func() R
+	SHA512 func() R
+}
+
+// Fold reduces Algo by one-level case analysis.
+func Fold[R any](a Algo, cs AlgoCases[R]) R {
+	switch any(a).(type) {
+	case SHA256:
+		return cs.SHA256()
+	case SHA384:
+		return cs.SHA384()
+	case SHA512:
+		return cs.SHA512()
+	default:
+		panic("goplus: impossible enum value in Fold")
+	}
+}
+
+// AlgoEqOverrides carries optional per-variant hooks for AlgoEqualWith.
+// A hook returning handled=false falls through to the derived comparison.
+type AlgoEqOverrides struct {
+	SHA256 func(x, y SHA256) (eq, handled bool)
+	SHA384 func(x, y SHA384) (eq, handled bool)
+	SHA512 func(x, y SHA512) (eq, handled bool)
+}
+
+// AlgoEqualWith reports structural equality of a and b under ov.
+func AlgoEqualWith(a, b Algo, ov AlgoEqOverrides) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	switch x := any(a).(type) {
+	case SHA256:
+		y, ok := any(b).(SHA256)
+		if !ok {
+			return false
+		}
+		if ov.SHA256 != nil {
+			if eq, handled := ov.SHA256(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	case SHA384:
+		y, ok := any(b).(SHA384)
+		if !ok {
+			return false
+		}
+		if ov.SHA384 != nil {
+			if eq, handled := ov.SHA384(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	case SHA512:
+		y, ok := any(b).(SHA512)
+		if !ok {
+			return false
+		}
+		if ov.SHA512 != nil {
+			if eq, handled := ov.SHA512(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	}
+	return false
+}
+
+// AlgoEqual reports structural equality of a and b.
+func AlgoEqual(a, b Algo) bool {
+	return AlgoEqualWith(a, b, AlgoEqOverrides{})
+}
+
+// name is the SRI wire token for the algorithm ("sha256"/"sha384"/"sha512").
+//
+//goplus:method (Algo) name
+func name(a Algo) string {
+	switch any(a).(type) {
+	case SHA256:
+
+		return "sha256"
+	case SHA384:
+
+		return "sha384"
+	case SHA512:
+
+		return "sha512"
+	default:
+		panic("goplus: impossible enum value in match")
+	}
+}
 
 var b64Enc = b64.StdEncoding
 
@@ -56,12 +167,12 @@ func Parse(sriHash string) (*Hash, error) {
 
 	var algo Algo
 	switch elems[0] {
-	case string(SHA256):
-		algo = SHA256
-	case string(SHA384):
-		algo = SHA384
-	case string(SHA512):
-		algo = SHA512
+	case "sha256":
+		algo = SHA256{}
+	case "sha384":
+		algo = SHA384{}
+	case "sha512":
+		algo = SHA512{}
 	default:
 		return nil, fmt.Errorf("sri: unsupported algo %s", elems[0])
 	}
@@ -73,7 +184,7 @@ func Parse(sriHash string) (*Hash, error) {
 	}
 	sum := dbuf[:n]
 
-	return &Hash{string(algo), sum}, nil
+	return &Hash{name(algo), sum}, nil
 }
 
 // Writer tees everything written to it into an underlying writer while
@@ -88,15 +199,18 @@ type Writer struct {
 // unsupported algorithm, matching upstream.
 func NewWriter(w io.Writer, algo Algo) Writer {
 	var h hash.Hash
-	switch algo {
+	switch any(algo).(type) {
 	case SHA256:
+
 		h = sha256.New()
 	case SHA384:
+
 		h = sha512.New384()
 	case SHA512:
+
 		h = sha512.New()
 	default:
-		panic("unsupported SRI algo")
+		panic("goplus: impossible enum value in match")
 	}
 	return Writer{w, algo, h}
 }
@@ -113,5 +227,5 @@ func (w Writer) Write(b []byte) (int, error) {
 // Sum finalizes and returns the accumulated hash.
 func (w Writer) Sum() *Hash {
 	sum := w.h.Sum(nil)
-	return &Hash{string(w.algo), sum}
+	return &Hash{name(w.algo), sum}
 }

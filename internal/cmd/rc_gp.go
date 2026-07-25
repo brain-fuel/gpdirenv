@@ -146,53 +146,169 @@ func (rc *RC) Deny() (err error) {
 	return os.Remove(rc.allowPath)
 }
 
-// AllowStatus represents the permission status of an RC file.
-type AllowStatus int
+// AllowStatus is the permission state of an RC file — a closed three-way sum
+// expressed as a Go+ enum so every consumer must handle all three outcomes.
+//
+//goplus:enum AllowStatus
+type AllowStatus interface{ isAllowStatus() }
 
-const (
-	// Allowed indicates the RC file is permitted to load.
-	Allowed AllowStatus = iota
-	// NotAllowed indicates the RC file has not been granted permission.
-	NotAllowed
-	// Denied indicates the RC file has been explicitly denied.
-	Denied
-)
+// Allowed: the RC file is permitted to load.
+//
+//goplus:variant (AllowStatus) Allowed
+type Allowed struct{}
+
+func (Allowed) isAllowStatus() {}
+
+// NotAllowed: the RC file has not been granted permission.
+//
+//goplus:variant (AllowStatus) NotAllowed
+type NotAllowed struct{}
+
+func (NotAllowed) isAllowStatus() {}
+
+// Denied: the RC file has been explicitly denied.
+//
+//goplus:variant (AllowStatus) Denied
+type Denied struct{}
+
+func (Denied) isAllowStatus() {}
+
+// AllowStatusCases selects one handler per AllowStatus variant for Fold.
+type AllowStatusCases[R any] struct {
+	Allowed    func() R
+	NotAllowed func() R
+	Denied     func() R
+}
+
+// Fold reduces AllowStatus by one-level case analysis.
+func Fold[R any](a AllowStatus, cs AllowStatusCases[R]) R {
+	switch any(a).(type) {
+	case Allowed:
+		return cs.Allowed()
+	case NotAllowed:
+		return cs.NotAllowed()
+	case Denied:
+		return cs.Denied()
+	default:
+		panic("goplus: impossible enum value in Fold")
+	}
+}
+
+// AllowStatusEqOverrides carries optional per-variant hooks for AllowStatusEqualWith.
+// A hook returning handled=false falls through to the derived comparison.
+type AllowStatusEqOverrides struct {
+	Allowed    func(x, y Allowed) (eq, handled bool)
+	NotAllowed func(x, y NotAllowed) (eq, handled bool)
+	Denied     func(x, y Denied) (eq, handled bool)
+}
+
+// AllowStatusEqualWith reports structural equality of a and b under ov.
+func AllowStatusEqualWith(a, b AllowStatus, ov AllowStatusEqOverrides) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	switch x := any(a).(type) {
+	case Allowed:
+		y, ok := any(b).(Allowed)
+		if !ok {
+			return false
+		}
+		if ov.Allowed != nil {
+			if eq, handled := ov.Allowed(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	case NotAllowed:
+		y, ok := any(b).(NotAllowed)
+		if !ok {
+			return false
+		}
+		if ov.NotAllowed != nil {
+			if eq, handled := ov.NotAllowed(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	case Denied:
+		y, ok := any(b).(Denied)
+		if !ok {
+			return false
+		}
+		if ov.Denied != nil {
+			if eq, handled := ov.Denied(x, y); handled {
+				return eq
+			}
+		}
+		_ = y
+		return true
+	}
+	return false
+}
+
+// AllowStatusEqual reports structural equality of a and b.
+func AllowStatusEqual(a, b AllowStatus) bool {
+	return AllowStatusEqualWith(a, b, AllowStatusEqOverrides{})
+}
+
+// ordinal renders the status as the integer direnv historically exposes in
+// `direnv status` (0=Allowed, 1=NotAllowed, 2=Denied); preserving that wire
+// form is why the enum is projected back to an int only at the status boundary.
+//
+//goplus:method (AllowStatus) ordinal
+func ordinal(s AllowStatus) int {
+	switch any(s).(type) {
+	case Allowed:
+
+		return 0
+	case NotAllowed:
+
+		return 1
+	case Denied:
+
+		return 2
+	default:
+		panic("goplus: impossible enum value in match")
+	}
+}
 
 // Allowed checks if the RC file has been granted loading
 func (rc *RC) Allowed() AllowStatus {
 	_, err := os.Stat(rc.denyPath)
 
 	if err == nil {
-		return Denied
+		return Denied{}
 	}
 
 	// happy path is if this envrc has been explicitly allowed, O(1)ish common case
 	_, err = os.Stat(rc.allowPath)
 
 	if err == nil {
-		return Allowed
+		return Allowed{}
 	}
 
 	// when whitelisting we want to be (path) absolutely sure we've not been duped with a symlink
 	path, err := filepath.Abs(rc.path)
 	// seems unlikely that we'd hit this, but have to handle it
 	if err != nil {
-		return NotAllowed
+		return NotAllowed{}
 	}
 
 	// exact whitelists are O(1)ish to check, so look there first
 	if rc.config.WhitelistExact[path] {
-		return Allowed
+		return Allowed{}
 	}
 
 	// finally we check if any of our whitelist prefixes match
 	for _, prefix := range rc.config.WhitelistPrefix {
 		if strings.HasPrefix(path, prefix) {
-			return Allowed
+			return Allowed{}
 		}
 	}
 
-	return NotAllowed
+	return NotAllowed{}
 }
 
 // Path returns the path to the RC file
@@ -225,13 +341,18 @@ func (rc *RC) Load(previousEnv Env) (newEnv Env, err error) {
 	}()
 
 	// Abort if the file is not allowed
-	switch rc.Allowed() {
+	switch any(rc.Allowed()).(type) {
 	case NotAllowed:
+
 		err = fmt.Errorf(notAllowed, rc.Path())
 		return
 	case Allowed:
+
 	case Denied:
+
 		return
+	default:
+		panic("goplus: impossible enum value in match")
 	}
 
 	// Allow RC loads to be canceled with SIGINT

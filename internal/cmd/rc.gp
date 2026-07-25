@@ -143,17 +143,30 @@ func (rc *RC) Deny() (err error) {
 	return os.Remove(rc.allowPath)
 }
 
-// AllowStatus represents the permission status of an RC file.
-type AllowStatus int
-
-const (
-	// Allowed indicates the RC file is permitted to load.
-	Allowed AllowStatus = iota
-	// NotAllowed indicates the RC file has not been granted permission.
+// AllowStatus is the permission state of an RC file — a closed three-way sum
+// expressed as a Go+ enum so every consumer must handle all three outcomes.
+type AllowStatus enum {
+	// Allowed: the RC file is permitted to load.
+	Allowed
+	// NotAllowed: the RC file has not been granted permission.
 	NotAllowed
-	// Denied indicates the RC file has been explicitly denied.
+	// Denied: the RC file has been explicitly denied.
 	Denied
-)
+}
+
+// ordinal renders the status as the integer direnv historically exposes in
+// `direnv status` (0=Allowed, 1=NotAllowed, 2=Denied); preserving that wire
+// form is why the enum is projected back to an int only at the status boundary.
+func (s AllowStatus) ordinal() int {
+	match s {
+	case Allowed:
+		return 0
+	case NotAllowed:
+		return 1
+	case Denied:
+		return 2
+	}
+}
 
 // Allowed checks if the RC file has been granted loading
 func (rc *RC) Allowed() AllowStatus {
@@ -222,7 +235,7 @@ func (rc *RC) Load(previousEnv Env) (newEnv Env, err error) {
 	}()
 
 	// Abort if the file is not allowed
-	switch rc.Allowed() {
+	match rc.Allowed() {
 	case NotAllowed:
 		err = fmt.Errorf(notAllowed, rc.Path())
 		return

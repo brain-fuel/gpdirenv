@@ -90,7 +90,7 @@ func TestDenyHashFilename(t *testing.T) {
 func TestAllowedPrecedence(t *testing.T) {
 	// Fresh RC is NotAllowed.
 	rc, _, _ := newTestRC(t, "export X=1\n")
-	if got := rc.Allowed(); got != NotAllowed {
+	if got := ordinal(rc.Allowed()); got != 1 /*NotAllowed*/ {
 		t.Fatalf("fresh: got %v, want NotAllowed", got)
 	}
 
@@ -98,7 +98,7 @@ func TestAllowedPrecedence(t *testing.T) {
 	if err := rc.Allow(); err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
-	if got := rc.Allowed(); got != Allowed {
+	if got := ordinal(rc.Allowed()); got != 0 /*Allowed*/ {
 		t.Fatalf("after allow: got %v, want Allowed", got)
 	}
 
@@ -106,7 +106,7 @@ func TestAllowedPrecedence(t *testing.T) {
 	if err := rc.Deny(); err != nil {
 		t.Fatalf("Deny: %v", err)
 	}
-	if got := rc.Allowed(); got != Denied {
+	if got := ordinal(rc.Allowed()); got != 2 /*Denied*/ {
 		t.Fatalf("after deny: got %v, want Denied", got)
 	}
 
@@ -114,14 +114,14 @@ func TestAllowedPrecedence(t *testing.T) {
 	rc2, config2, rcPath2 := newTestRC(t, "export Y=2\n")
 	abs2, _ := filepath.Abs(rcPath2)
 	config2.WhitelistExact[abs2] = true
-	if got := rc2.Allowed(); got != Allowed {
+	if got := ordinal(rc2.Allowed()); got != 0 /*Allowed*/ {
 		t.Fatalf("exact whitelist: got %v, want Allowed", got)
 	}
 
 	// Whitelist (prefix) also grants Allowed.
 	rc3, config3, rcPath3 := newTestRC(t, "export Z=3\n")
 	config3.WhitelistPrefix = []string{filepath.Dir(rcPath3)}
-	if got := rc3.Allowed(); got != Allowed {
+	if got := ordinal(rc3.Allowed()); got != 0 /*Allowed*/ {
 		t.Fatalf("prefix whitelist: got %v, want Allowed", got)
 	}
 
@@ -129,7 +129,7 @@ func TestAllowedPrecedence(t *testing.T) {
 	if err := rc2.Deny(); err != nil {
 		t.Fatalf("Deny rc2: %v", err)
 	}
-	if got := rc2.Allowed(); got != Denied {
+	if got := ordinal(rc2.Allowed()); got != 2 /*Denied*/ {
 		t.Fatalf("denied+whitelisted: got %v, want Denied", got)
 	}
 }

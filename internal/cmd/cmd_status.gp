@@ -32,7 +32,7 @@ var CmdStatus = &Cmd{
 			if loadedRC != nil {
 				jsonOutput["state"].(map[string]interface{})["loadedRC"] = map[string]interface{}{
 					"path":    loadedRC.path,
-					"allowed": loadedRC.Allowed(),
+					"allowed": loadedRC.Allowed().ordinal(),
 				}
 			} else {
 				jsonOutput["state"].(map[string]interface{})["loadedRC"] = nil
@@ -40,7 +40,7 @@ var CmdStatus = &Cmd{
 			if foundRC != nil {
 				jsonOutput["state"].(map[string]interface{})["foundRC"] = map[string]interface{}{
 					"path":    foundRC.path,
-					"allowed": foundRC.Allowed(),
+					"allowed": foundRC.Allowed().ordinal(),
 				}
 			} else {
 				jsonOutput["state"].(map[string]interface{})["foundRC"] = nil
@@ -90,6 +90,6 @@ func formatRC(desc string, rc *RC) {
 	for idx := range *(rc.times.list) {
 		fmt.Println(desc, "watch:", (*rc.times.list)[idx].Formatted(workDir))
 	}
-	fmt.Println(desc, "RC allowed", rc.Allowed())
+	fmt.Println(desc, "RC allowed", rc.Allowed().ordinal())
 	fmt.Println(desc, "RC allowPath", rc.allowPath)
 }

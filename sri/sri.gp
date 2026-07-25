@@ -17,14 +17,25 @@ import (
 	"strings"
 )
 
-// Algo names a supported hash algorithm.
-type Algo string
+// Algo is a supported hash algorithm — a closed set expressed as a Go+ enum so
+// every consumer must handle all three cases.
+type Algo enum {
+	SHA256
+	SHA384
+	SHA512
+}
 
-const (
-	SHA256 = Algo("sha256")
-	SHA384 = Algo("sha384")
-	SHA512 = Algo("sha512")
-)
+// name is the SRI wire token for the algorithm ("sha256"/"sha384"/"sha512").
+func (a Algo) name() string {
+	match a {
+	case SHA256:
+		return "sha256"
+	case SHA384:
+		return "sha384"
+	case SHA512:
+		return "sha512"
+	}
+}
 
 var b64Enc = b64.StdEncoding
 
@@ -53,11 +64,11 @@ func Parse(sriHash string) (*Hash, error) {
 
 	var algo Algo
 	switch elems[0] {
-	case string(SHA256):
+	case "sha256":
 		algo = SHA256
-	case string(SHA384):
+	case "sha384":
 		algo = SHA384
-	case string(SHA512):
+	case "sha512":
 		algo = SHA512
 	default:
 		return nil, fmt.Errorf("sri: unsupported algo %s", elems[0])
@@ -70,7 +81,7 @@ func Parse(sriHash string) (*Hash, error) {
 	}
 	sum := dbuf[:n]
 
-	return &Hash{string(algo), sum}, nil
+	return &Hash{algo.name(), sum}, nil
 }
 
 // Writer tees everything written to it into an underlying writer while
@@ -85,15 +96,13 @@ type Writer struct {
 // unsupported algorithm, matching upstream.
 func NewWriter(w io.Writer, algo Algo) Writer {
 	var h hash.Hash
-	switch algo {
+	match algo {
 	case SHA256:
 		h = sha256.New()
 	case SHA384:
 		h = sha512.New384()
 	case SHA512:
 		h = sha512.New()
-	default:
-		panic("unsupported SRI algo")
 	}
 	return Writer{w, algo, h}
 }
@@ -110,5 +119,5 @@ func (w Writer) Write(b []byte) (int, error) {
 // Sum finalizes and returns the accumulated hash.
 func (w Writer) Sum() *Hash {
 	sum := w.h.Sum(nil)
-	return &Hash{string(w.algo), sum}
+	return &Hash{w.algo.name(), sum}
 }

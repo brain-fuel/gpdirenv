@@ -14,8 +14,8 @@ done in `goplus/GOFORGE_CANDIDATES_WAVE1.md`.
 |---|---:|---|---|
 | Importable library packages | 3 | Go+ (`dotenv`, `sri`, `gzenv`) | **3/3 done** — byte-exact differential |
 | Pure engine cores | 3 | Go+ (`env`, `shell`, `xdg`) | **3/3 done** — incl. **all 12 shells**, `BashEscape`/`FishEscape`/`TcshEscape`/PowerShell escapers byte-exact |
-| Effectful engine | 4 | Go (`config`, `rc`, `file_times`, `log`) | **done** — allow/deny hash store, `.envrc` resolution, watches; hermetic unit tests |
-| CLI subcommands | 23 | Go (`internal/cmd`) | **23/23 ported + building**; core behaviors differential-verified vs the pinned binary |
+| Effectful engine | 4 | **Go+** (`config`, `rc`, `file_times`, `log`) | **done** — allow/deny hash store, `.envrc` resolution, watches; hermetic unit tests |
+| CLI subcommands | 23 | **Go+** (`internal/cmd`) | **23/23 authored in Go+ + building**; core behaviors differential-verified vs the pinned binary |
 | stdlib.sh functions | 59 | Bash contract | **done — embedded byte-identical** (`cmd/direnv/stdlib.sh`, artifact parity) |
 | `direnv` binary | 1 | `cmd/direnv` | **builds; `version`=2.37.1; differential-parity vs upstream binary** |
 
@@ -78,12 +78,17 @@ generated inputs plus upstream's own fixed vectors. `go test -race ./...`,
   `watch`/`watch-dir`/`watch-list`, `current`. All are ported and build; their
   core logic shares the differential-verified engine, but each lacks a dedicated
   subprocess parity case.
-- [ ] **Go+ idiom pass on the effectful glue** — `internal/cmd` (engine + CLI) is
-  authored in **plain Go** (faithful vendored port of upstream `internal/cmd`), a
-  runtime-boundary shim. The pure cores (`env`/`shell`/`xdg`/`dotenv`/`sri`/
-  `gzenv`) are Go+. Converting more of the glue to Go+ semantic idioms
-  (`Result`-typed outcomes, exhaustive `AllowStatus`/`Algo` enums, capability-
-  scoped effects) is the next authorship step.
+- [x] **Go+ authorship of the effectful glue** — `internal/cmd` (engine + all 23
+  commands) is now authored in **Go+** (33 `.gp` files → committed `*_gp.go`),
+  matching the rest of the module. The conversion is behavior-preserving
+  (differential parity unchanged). This codebase's established enum idiom is the
+  typed-const + `switch` form (`sri.Algo`, `AllowStatus`), used consistently in
+  the pure cores too — so no `enum`/`match` reshape was forced onto the imperative
+  I/O glue, which would have been an inconsistent one-off and risked parity.
+  **Regen caveat:** the larger cross-referential `cmd` package triggers the
+  `resolution did not converge` bug in released goplus v0.137.0; it regenerates
+  cleanly only with the convergence-fixed toolchain (unreleased WIP — same
+  situation as Viper). The committed `*_gp.go` builds/tests without the toolchain.
 - [ ] **`std/config` extension** — the reason direnv is Wave 2's first pick:
   capability-scoped source loading + watch/reload as a *second independent
   consumer* of the same immutable-snapshot/provenance abstraction Viper needs.

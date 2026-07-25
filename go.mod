@@ -5,7 +5,7 @@ go 1.26.0
 // Go+ toolchain. `go tool goplus gen ./...` regenerates every *_gp.go.
 tool goforge.dev/goplus/cmd/goplus
 
-require goforge.dev/goplus v0.137.0 // indirect
+require goforge.dev/goplus v0.138.0 // indirect
 
 require (
 	github.com/direnv/direnv/v2 v2.37.1

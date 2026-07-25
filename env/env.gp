@@ -1,0 +1,250 @@
+// Package env is direnv's environment model: the Env map, the EnvDiff between
+// two environments, and the Shell port an environment renders through.
+//
+// Adapted from direnv v2.37.1 internal/cmd (env.go, env_diff.go, shell.go,
+// const.go) — MIT, (c) 2019 zimbatm and contributors. Upstream keeps these in
+// one internal package; here the Shell interface and ShellExport live with Env
+// (the types that need them) so the concrete shells can depend on `env`
+// one-directionally. Pure; differentially tested against the pinned upstream.
+package env
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+
+	"goforge.dev/gpdirenv/gzenv"
+)
+
+// direnv's own context variables, stripped when reverting an environment.
+const (
+	DIRENV_DIR            = "DIRENV_DIR"
+	DIRENV_FILE           = "DIRENV_FILE"
+	DIRENV_WATCHES        = "DIRENV_WATCHES"
+	DIRENV_DIFF           = "DIRENV_DIFF"
+	DIRENV_DUMP_FILE_PATH = "DIRENV_DUMP_FILE_PATH"
+)
+
+// Shell represents the interaction with a host shell: how an environment is
+// rendered into commands that shell can evaluate.
+type Shell interface {
+	Hook() (string, error)
+	Export(e ShellExport) (string, error)
+	Dump(env Env) (string, error)
+}
+
+// ShellExport is the set of variables to add (non-nil value) or remove (nil
+// value) on the host shell.
+type ShellExport map[string]*string
+
+// Add records the addition of an environment variable.
+func (e ShellExport) Add(key, value string) { e[key] = &value }
+
+// Remove records the removal of an environment variable.
+func (e ShellExport) Remove(key string) { e[key] = nil }
+
+// Env is a map representation of environment variables.
+type Env map[string]string
+
+// GetEnv turns the process environment into an Env. Duplicate keys keep the
+// last value (POSIX permits duplicates; direnv does not support them).
+func GetEnv() Env {
+	env := make(Env)
+	for _, kv := range os.Environ() {
+		kv2 := strings.SplitN(kv, "=", 2)
+		env[kv2[0]] = kv2[1]
+	}
+	return env
+}
+
+// CleanContext removes all direnv-related variables. Call after reverting an
+// environment so direnv does not stay amnesic about the previous load.
+func (env Env) CleanContext() {
+	delete(env, DIRENV_DIFF)
+	delete(env, DIRENV_DIR)
+	delete(env, DIRENV_FILE)
+	delete(env, DIRENV_DUMP_FILE_PATH)
+	delete(env, DIRENV_WATCHES)
+}
+
+// LoadEnv unmarshals an Env from a gzenv string.
+func LoadEnv(gzenvStr string) (Env, error) {
+	env := make(Env)
+	err := gzenv.Unmarshal(gzenvStr, &env)
+	return env, err
+}
+
+// LoadEnvJSON unmarshals an Env from a JSON byte slice.
+func LoadEnvJSON(jsonBytes []byte) (Env, error) {
+	env := make(Env)
+	err := json.Unmarshal(jsonBytes, &env)
+	return env, err
+}
+
+// Copy returns a fresh, independent copy of the env.
+func (env Env) Copy() Env {
+	newEnv := make(Env)
+	for key, value := range env {
+		newEnv[key] = value
+	}
+	return newEnv
+}
+
+// ToGoEnv turns the env back into a list of "key=value" strings, like
+// os.Environ(). Order follows map iteration and is not deterministic.
+func (env Env) ToGoEnv() []string {
+	goEnv := make([]string, len(env))
+	index := 0
+	for key, value := range env {
+		goEnv[index] = strings.Join([]string{key, value}, "=")
+		index++
+	}
+	return goEnv
+}
+
+// ToShell renders the whole environment through the target shell.
+func (env Env) ToShell(shell Shell) (string, error) {
+	e := make(ShellExport)
+	for key, value := range env {
+		e.Add(key, value)
+	}
+	return shell.Export(e)
+}
+
+// Serialize marshals the env into the gzenv format.
+func (env Env) Serialize() string {
+	return gzenv.Marshal(env)
+}
+
+// Diff returns the diff between this env and other.
+func (env Env) Diff(other Env) *EnvDiff {
+	return BuildEnvDiff(env, other)
+}
+
+// Fetch returns env[key], or def if key is unset. An empty value counts as set.
+func (env Env) Fetch(key, def string) string {
+	v, ok := env[key]
+	if !ok {
+		v = def
+	}
+	return v
+}
+
+// IgnoredKeys are variables excluded from environment diffs.
+var IgnoredKeys = map[string]bool{
+	"DIRENV_CONFIG":   true,
+	"DIRENV_BASH":     true,
+	"DIRENV_IN_ENVRC": true,
+	"COMP_WORDBREAKS": true, // avoids segfaults in bash
+	"PS1":             true, // PS1 should not be exported
+	"OLDPWD":          true,
+	"PWD":             true,
+	"SHELL":           true,
+	"SHELLOPTS":       true,
+	"SHLVL":           true,
+	"_":               true,
+}
+
+// EnvDiff represents the diff between two environments.
+type EnvDiff struct {
+	Prev map[string]string `json:"p"`
+	Next map[string]string `json:"n"`
+}
+
+// NewEnvDiff is an empty EnvDiff constructor.
+func NewEnvDiff() *EnvDiff {
+	return &EnvDiff{make(map[string]string), make(map[string]string)}
+}
+
+// BuildEnvDiff analyses the changes from e1 to e2 and builds an EnvDiff.
+func BuildEnvDiff(e1, e2 Env) *EnvDiff {
+	diff := NewEnvDiff()
+
+	in := func(key string, e Env) bool {
+		_, ok := e[key]
+		return ok
+	}
+
+	for key := range e1 {
+		if IgnoredEnv(key) {
+			continue
+		}
+		if e2[key] != e1[key] || !in(key, e2) {
+			diff.Prev[key] = e1[key]
+		}
+	}
+
+	for key := range e2 {
+		if IgnoredEnv(key) {
+			continue
+		}
+		if e2[key] != e1[key] || !in(key, e1) {
+			diff.Next[key] = e2[key]
+		}
+	}
+
+	return diff
+}
+
+// LoadEnvDiff unmarshals an EnvDiff from a gzenv string.
+func LoadEnvDiff(gzenvStr string) (*EnvDiff, error) {
+	diff := new(EnvDiff)
+	err := gzenv.Unmarshal(gzenvStr, diff)
+	return diff, err
+}
+
+// Any reports whether the diff contains any change.
+func (diff *EnvDiff) Any() bool {
+	return len(diff.Prev) > 0 || len(diff.Next) > 0
+}
+
+// ToShell renders the diff as add/remove commands for the target shell.
+func (diff *EnvDiff) ToShell(shell Shell) (string, error) {
+	e := make(ShellExport)
+	for key := range diff.Prev {
+		if _, ok := diff.Next[key]; !ok {
+			e.Remove(key)
+		}
+	}
+	for key, value := range diff.Next {
+		e.Add(key, value)
+	}
+	return shell.Export(e)
+}
+
+// Patch applies the diff to env and returns a new env (Next wins).
+func (diff *EnvDiff) Patch(env Env) Env {
+	newEnv := make(Env)
+	for k, v := range env {
+		newEnv[k] = v
+	}
+	for key := range diff.Prev {
+		delete(newEnv, key)
+	}
+	for key, value := range diff.Next {
+		newEnv[key] = value
+	}
+	return newEnv
+}
+
+// Reverse flips the diff so it applies the other way around.
+func (diff *EnvDiff) Reverse() *EnvDiff {
+	return &EnvDiff{diff.Next, diff.Prev}
+}
+
+// Serialize marshals the diff into the gzenv format.
+func (diff *EnvDiff) Serialize() string {
+	return gzenv.Marshal(diff)
+}
+
+// IgnoredEnv reports whether a key is excluded from environment diffs.
+func IgnoredEnv(key string) bool {
+	if strings.HasPrefix(key, "__fish") {
+		return true
+	}
+	if strings.HasPrefix(key, "BASH_FUNC_") {
+		return true
+	}
+	_, found := IgnoredKeys[key]
+	return found
+}

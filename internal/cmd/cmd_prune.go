@@ -1,0 +1,65 @@
+// Ported from direnv v2.37.1 internal/cmd (MIT, (c) 2019 zimbatm and
+// contributors). Effectful/runtime-boundary glue kept in plain Go; the pure
+// env/shell semantic cores live in the goforge.dev/gpdirenv/{env,shell}
+// packages. Faithful vendor + import surgery — behavior preserved verbatim.
+package cmd
+
+import (
+	"log"
+	"os"
+	"path"
+	"strings"
+)
+
+// CmdPrune is `direnv prune`
+var CmdPrune = &Cmd{
+	Name:   "prune",
+	Desc:   "Removes old allowed files",
+	Action: actionWithConfig(cmdPruneAction),
+}
+
+func cmdPruneAction(_ Env, _ []string, config *Config) (err error) {
+	var dir *os.File
+	var fi os.FileInfo
+	var dirList []string
+	var envrc []byte
+
+	allowed := config.AllowDir()
+	if dir, err = os.Open(allowed); err != nil {
+		return err
+	}
+	defer func() {
+		if err := dir.Close(); err != nil {
+			log.Printf("Warning: failed to close directory: %v", err)
+		}
+	}()
+
+	if dirList, err = dir.Readdirnames(0); err != nil {
+		return err
+	}
+
+	for _, hash := range dirList {
+		filename := path.Join(allowed, hash)
+		if fi, err = os.Stat(filename); err != nil {
+			return err
+		}
+
+		if !fi.IsDir() {
+			if envrc, err = os.ReadFile(filename); err != nil {
+				return err
+			}
+			envrcStr := strings.TrimSpace(string(envrc))
+
+			// skip old files, w/o path inside
+			if envrcStr == "" {
+				continue
+			}
+			if !fileExists(envrcStr) {
+				_ = os.Remove(filename)
+			}
+
+		}
+
+	}
+	return nil
+}

@@ -1,0 +1,9 @@
+# Build output
+/direnv
+/gpdirenv
+*.test
+*.out
+
+# Local env
+.envrc
+.direnv/

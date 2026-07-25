@@ -1,0 +1,260 @@
+// Package shell renders a direnv environment into commands a host shell can
+// evaluate. It implements the env.Shell port.
+//
+// Adapted from direnv v2.37.1 internal/cmd (shell.go, shell_bash.go,
+// shell_json.go, shell_gzenv.go, and the per-shell renderers) — MIT, (c) 2019
+// zimbatm and contributors. bash, json and gzenv live here; the remaining
+// shells (zsh/fish/tcsh/elvish/murex/pwsh/vim/gha/systemd) live in
+// shell_more.gp. Every escaper is byte-for-byte differentially tested.
+package shell
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+
+	"goforge.dev/gpdirenv/env"
+	"goforge.dev/gpdirenv/gzenv"
+)
+
+// supportedShellList maps a shell name to its implementation.
+var supportedShellList = map[string]env.Shell{
+	"bash":    Bash,
+	"elvish":  Elvish,
+	"fish":    Fish,
+	"gha":     GitHubActions,
+	"gzenv":   GzEnv,
+	"json":    JSON,
+	"murex":   Murex,
+	"tcsh":    Tcsh,
+	"vim":     Vim,
+	"zsh":     Zsh,
+	"pwsh":    Pwsh,
+	"systemd": Systemd,
+}
+
+// DetectShell returns the Shell for target (usually $0, possibly prefixed with
+// "-"), or nil if unsupported.
+func DetectShell(target string) env.Shell {
+	target = filepath.Base(target)
+	if target[0:1] == "-" {
+		target = target[1:]
+	}
+	detected, ok := supportedShellList[target]
+	if ok {
+		return detected
+	}
+	return nil
+}
+
+// --- bash ---
+
+type bash struct{}
+
+// Bash renders into POSIX bash export/unset commands.
+var Bash env.Shell = bash{}
+
+const bashHook = `
+_direnv_hook() {
+  local previous_exit_status=$?;
+  trap -- '' SIGINT;
+  eval "$("{{.SelfPath}}" export bash)";
+  trap - SIGINT;
+  return $previous_exit_status;
+};
+if [[ ";${PROMPT_COMMAND[*]:-};" != *";_direnv_hook;"* ]]; then
+  if [[ "$(declare -p PROMPT_COMMAND 2>&1)" == "declare -a"* ]]; then
+    PROMPT_COMMAND=(_direnv_hook "${PROMPT_COMMAND[@]}")
+  else
+    PROMPT_COMMAND="_direnv_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  fi
+fi
+`
+
+func (sh bash) Hook() (string, error) { return bashHook, nil }
+
+func (sh bash) Export(e env.ShellExport) (string, error) {
+	var out string
+	for key, value := range e {
+		if value == nil {
+			out += sh.unset(key)
+		} else {
+			out += sh.export(key, *value)
+		}
+	}
+	return out, nil
+}
+
+func (sh bash) Dump(e env.Env) (string, error) {
+	var out string
+	for key, value := range e {
+		out += sh.export(key, value)
+	}
+	return out, nil
+}
+
+func (sh bash) export(key, value string) string {
+	return "export " + sh.escape(key) + "=" + sh.escape(value) + ";"
+}
+
+func (sh bash) unset(key string) string {
+	return "unset " + sh.escape(key) + ";"
+}
+
+func (sh bash) escape(str string) string { return BashEscape(str) }
+
+// Byte landmarks for the escape cascade.
+const (
+	ACK           = 6
+	TAB           = 9
+	LF            = 10
+	CR            = 13
+	US            = 31
+	AMPERSTAND    = 38
+	SINGLE_QUOTE  = 39
+	PLUS          = 43
+	NINE          = 57
+	QUESTION      = 63
+	UPPERCASE_Z   = 90
+	OPEN_BRACKET  = 91
+	BACKSLASH     = 92
+	UNDERSCORE    = 95
+	CLOSE_BRACKET = 93
+	BACKTICK      = 96
+	TILDE         = 126
+	DEL           = 127
+)
+
+// BashEscape escapes a string for safe use in bash. Strings needing escapes
+// are wrapped in $'...'; control characters become ANSI escapes and high bytes
+// become \xNN hex, so the result is always single-line ASCII.
+//
+// Based on https://github.com/solidsnack/shell-escape (Text.ShellEscape.Bash).
+func BashEscape(str string) string {
+	if str == "" {
+		return "''"
+	}
+	in := []byte(str)
+	out := ""
+	i := 0
+	l := len(in)
+	escape := false
+
+	hex := func(char byte) {
+		escape = true
+		out += fmt.Sprintf("\\x%02x", char)
+	}
+	backslash := func(char byte) {
+		escape = true
+		out += string([]byte{BACKSLASH, char})
+	}
+	escaped := func(s string) {
+		escape = true
+		out += s
+	}
+	quoted := func(char byte) {
+		escape = true
+		out += string([]byte{char})
+	}
+	literal := func(char byte) {
+		out += string([]byte{char})
+	}
+
+	for i < l {
+		char := in[i]
+		switch {
+		case char == ACK:
+			hex(char)
+		case char == TAB:
+			escaped(`\t`)
+		case char == LF:
+			escaped(`\n`)
+		case char == CR:
+			escaped(`\r`)
+		case char <= US:
+			hex(char)
+		case char <= AMPERSTAND:
+			quoted(char)
+		case char == SINGLE_QUOTE:
+			backslash(char)
+		case char <= PLUS:
+			quoted(char)
+		case char <= NINE:
+			literal(char)
+		case char <= QUESTION:
+			quoted(char)
+		case char <= UPPERCASE_Z:
+			literal(char)
+		case char == OPEN_BRACKET:
+			quoted(char)
+		case char == BACKSLASH:
+			backslash(char)
+		case char == UNDERSCORE:
+			literal(char)
+		case char <= CLOSE_BRACKET:
+			quoted(char)
+		case char <= BACKTICK:
+			quoted(char)
+		case char <= TILDE:
+			quoted(char)
+		case char == DEL:
+			hex(char)
+		default:
+			hex(char)
+		}
+		i++
+	}
+
+	if escape {
+		out = "$'" + out + "'"
+	}
+	return out
+}
+
+// --- json ---
+
+type jsonShell struct{}
+
+// JSON renders the environment as indented JSON (not a real shell; useful for
+// editors and tools).
+var JSON env.Shell = jsonShell{}
+
+func (sh jsonShell) Hook() (string, error) {
+	return "", errors.New("this feature is not supported")
+}
+
+func (sh jsonShell) Export(e env.ShellExport) (string, error) {
+	out, err := json.MarshalIndent(e, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func (sh jsonShell) Dump(e env.Env) (string, error) {
+	out, err := json.MarshalIndent(e, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// --- gzenv ---
+
+type gzEnvShell struct{}
+
+// GzEnv renders the environment as a single gzenv token (used by `direnv dump`).
+var GzEnv env.Shell = gzEnvShell{}
+
+func (sh gzEnvShell) Hook() (string, error) {
+	return "", errors.New("this feature is not supported")
+}
+
+func (sh gzEnvShell) Export(e env.ShellExport) (string, error) {
+	return gzenv.Marshal(e), nil
+}
+
+func (sh gzEnvShell) Dump(e env.Env) (string, error) {
+	return gzenv.Marshal(e), nil
+}

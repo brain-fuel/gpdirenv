@@ -9,6 +9,7 @@ require goforge.dev/goplus v0.138.0 // indirect
 
 require (
 	github.com/direnv/direnv/v2 v2.37.1
+	goforge.dev/goplus/std v0.204.0
 	golang.org/x/mod v0.38.0
 )
 
